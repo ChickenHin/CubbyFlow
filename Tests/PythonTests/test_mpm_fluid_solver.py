@@ -47,9 +47,12 @@ def test_mpm_fluid_solver_api(
     assert solver.eosExponent == pytest.approx(5.0)
     assert solver.negativePressureScale == pytest.approx(0.25)
     assert solver.timeStepLimitScale == pytest.approx(0.9)
+    assert solver.closedDomainBoundaryFlag == pyCubbyFlow.DIRECTION_ALL
 
     solver.timeStepLimitScale = 0.5
     assert solver.timeStepLimitScale == pytest.approx(0.5)
+    solver.closedDomainBoundaryFlag = pyCubbyFlow.DIRECTION_LEFT
+    assert solver.closedDomainBoundaryFlag == pyCubbyFlow.DIRECTION_LEFT
     with pytest.raises(AttributeError):
         solver.targetDensity = 1000.0
 
