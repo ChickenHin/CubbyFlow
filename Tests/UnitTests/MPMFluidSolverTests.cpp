@@ -488,9 +488,14 @@ void ExpectFrictionAffectsGrid()
 }
 
 template <size_t N>
-void ExpectParticleDomainProjection()
+void ExpectParticleDomainProjection(size_t axis, bool isUpper)
 {
-    const auto runCase = [](int boundaryFlag) {
+    constexpr std::array lowerFlags{ DIRECTION_LEFT, DIRECTION_DOWN,
+                                     DIRECTION_BACK };
+    constexpr std::array upperFlags{ DIRECTION_RIGHT, DIRECTION_UP,
+                                     DIRECTION_FRONT };
+    const auto runCase = [axis, isUpper](int boundaryFlag,
+                                         double normalVelocity) {
         MPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(4),
                                   VectorD<N>::MakeConstant(1.0) };
 
@@ -503,24 +508,33 @@ void ExpectParticleDomainProjection()
         VectorD<N> position = VectorD<N>::MakeConstant(2.0);
         VectorD<N> velocity;
 
-        position[0] = -0.01;
-        velocity[0] = -1.0;
+        position[axis] = isUpper ? 4.01 : -0.01;
+        velocity[axis] = normalVelocity;
 
         auto data = solver.GetMPMSystemData();
         data->AddParticle(position, velocity);
 
         solver.Update(Frame{ 0, 1e-3 });
 
-        return std::array{ data->Positions()[0][0], data->Velocities()[0][0] };
+        return std::array{ data->Positions()[0][axis],
+                           data->Velocities()[0][axis] };
     };
 
-    const auto closed = runCase(DIRECTION_LEFT);
-    EXPECT_DOUBLE_EQ(closed[0], 0.0);
-    EXPECT_GE(closed[1], 0.0);
+    const int boundaryFlag = isUpper ? upperFlags[axis] : lowerFlags[axis];
+    const double outwardVelocity = isUpper ? 1.0 : -1.0;
+    const double boundary = isUpper ? 4.0 : 0.0;
 
-    const auto open = runCase(DIRECTION_NONE);
-    EXPECT_NEAR(open[0], -0.011, 1e-12);
-    EXPECT_NEAR(open[1], -1.0, 1e-12);
+    const auto closed = runCase(boundaryFlag, outwardVelocity);
+    EXPECT_DOUBLE_EQ(closed[0], boundary);
+    EXPECT_NEAR(closed[1], 0.0, 1e-12);
+
+    const auto inward = runCase(boundaryFlag, -outwardVelocity);
+    EXPECT_DOUBLE_EQ(inward[0], boundary);
+    EXPECT_NEAR(inward[1], -outwardVelocity, 1e-12);
+
+    const auto open = runCase(DIRECTION_NONE, outwardVelocity);
+    EXPECT_NEAR(open[0], isUpper ? 4.011 : -0.011, 1e-12);
+    EXPECT_NEAR(open[1], outwardVelocity, 1e-12);
 }
 
 template <size_t N>
@@ -767,8 +781,17 @@ TEST(MPMFluidSolver, ColliderContact)
 
 TEST(MPMFluidSolver, ParticleDomainProjection)
 {
-    ExpectParticleDomainProjection<2>();
-    ExpectParticleDomainProjection<3>();
+    for (bool isUpper : { false, true })
+    {
+        for (size_t axis = 0; axis < 2; ++axis)
+        {
+            ExpectParticleDomainProjection<2>(axis, isUpper);
+        }
+        for (size_t axis = 0; axis < 3; ++axis)
+        {
+            ExpectParticleDomainProjection<3>(axis, isUpper);
+        }
+    }
 }
 
 TEST(MPMFluidSolver, ParticleColliderProjection)
