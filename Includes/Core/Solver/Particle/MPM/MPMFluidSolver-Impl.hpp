@@ -295,9 +295,8 @@ void MPMFluidSolver<N>::ConstrainGridVelocities()
             }
 
             VectorType velocity = gridVelocities(index);
-            const auto collider = this->GetCollider();
 
-            if (collider != nullptr)
+            if (const auto& collider = this->GetCollider(); collider != nullptr)
             {
                 VectorType position = gridVelocities.DataPosition()(index);
                 collider->ResolveCollision(0.0, 0.0, &position, &velocity);
