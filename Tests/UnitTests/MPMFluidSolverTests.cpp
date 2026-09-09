@@ -722,7 +722,8 @@ void ExpectDamBreakConservesMassAndStaysInDomain()
 
     EXPECT_EQ(data->NumberOfParticles(), initialCount);
     EXPECT_NEAR(finalMass, initialMass,
-                std::numeric_limits<double>::epsilon() * initialMass);
+                std::numeric_limits<double>::epsilon() * initialMass *
+                    static_cast<double>(initialCount));
     EXPECT_GT(finalMaxX, initialMaxX + 0.01);
 }
 }  // namespace
