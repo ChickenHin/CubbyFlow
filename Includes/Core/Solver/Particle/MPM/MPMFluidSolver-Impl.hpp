@@ -12,6 +12,7 @@
 #define CUBBYFLOW_MPM_FLUID_SOLVER_IMPL_HPP
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -74,6 +75,18 @@ void MPMFluidSolver<N>::SetTimeStepLimitScale(double newScale)
     }
 
     m_timeStepLimitScale = newScale;
+}
+
+template <size_t N>
+int MPMFluidSolver<N>::GetClosedDomainBoundaryFlag() const
+{
+    return m_closedDomainBoundaryFlag;
+}
+
+template <size_t N>
+void MPMFluidSolver<N>::SetClosedDomainBoundaryFlag(int flag)
+{
+    m_closedDomainBoundaryFlag = flag;
 }
 
 template <size_t N>
@@ -154,9 +167,19 @@ template <size_t N>
 void MPMFluidSolver<N>::OnBeginAdvanceTimeStep(double timeStepInSeconds)
 {
     m_mpmSystemData->TransferFromParticlesToGrid();
+
     InitializeReferenceVolumes();
     UpdateGridVelocities(timeStepInSeconds);
+    ConstrainGridVelocities();
+
     m_mpmSystemData->TransferFromGridToParticles(timeStepInSeconds);
+}
+
+template <size_t N>
+void MPMFluidSolver<N>::OnEndAdvanceTimeStep(double timeStepInSeconds)
+{
+    Base::OnEndAdvanceTimeStep(timeStepInSeconds);
+    ConstrainParticlesToDomain();
 }
 
 template <size_t N>
@@ -250,6 +273,86 @@ void MPMFluidSolver<N>::UpdateGridVelocities(double timeStepInSeconds)
             gridVelocities(index) += increment;
         }
     }
+}
+
+template <size_t N>
+void MPMFluidSolver<N>::ConstrainGridVelocities()
+{
+    static constexpr std::array lowerFlags{ DIRECTION_LEFT, DIRECTION_DOWN,
+                                            DIRECTION_BACK };
+    static constexpr std::array upperFlags{ DIRECTION_RIGHT, DIRECTION_UP,
+                                            DIRECTION_FRONT };
+
+    const auto& gridMass = m_mpmSystemData->GridMass();
+    auto& gridVelocities = m_mpmSystemData->GridVelocities();
+    const auto dataSize = gridVelocities.DataSize();
+
+    gridVelocities.ParallelForEachDataPointIndex(
+        [this, &gridMass, &gridVelocities, dataSize](const SizeType& index) {
+            if (gridMass(index) <= 0.0)
+            {
+                return;
+            }
+
+            VectorType velocity = gridVelocities(index);
+
+            if (const auto& collider = this->GetCollider(); collider != nullptr)
+            {
+                VectorType position = gridVelocities.DataPosition()(index);
+                collider->ResolveCollision(0.0, 0.0, &position, &velocity);
+            }
+
+            for (size_t axis = 0; axis < N; ++axis)
+            {
+                const bool exceedsLower =
+                    (m_closedDomainBoundaryFlag & lowerFlags[axis]) != 0 &&
+                    index[axis] == 0 && velocity[axis] < 0.0;
+                const bool exceedsUpper =
+                    (m_closedDomainBoundaryFlag & upperFlags[axis]) != 0 &&
+                    index[axis] == dataSize[axis] - 1 && velocity[axis] > 0.0;
+
+                if (exceedsLower || exceedsUpper)
+                {
+                    velocity[axis] = 0.0;
+                }
+            }
+
+            gridVelocities(index) = velocity;
+        });
+}
+
+template <size_t N>
+void MPMFluidSolver<N>::ConstrainParticlesToDomain()
+{
+    static constexpr std::array lowerFlags{ DIRECTION_LEFT, DIRECTION_DOWN,
+                                            DIRECTION_BACK };
+    static constexpr std::array upperFlags{ DIRECTION_RIGHT, DIRECTION_UP,
+                                            DIRECTION_FRONT };
+
+    const auto domain = m_mpmSystemData->GridMass().GetBoundingBox();
+    auto positions = m_mpmSystemData->Positions();
+    auto velocities = m_mpmSystemData->Velocities();
+
+    ParallelFor(
+        ZERO_SIZE, positions.Length(),
+        [&domain, &positions, &velocities, this](size_t i) {
+            for (size_t axis = 0; axis < N; ++axis)
+            {
+                if ((m_closedDomainBoundaryFlag & lowerFlags[axis]) != 0 &&
+                    positions[i][axis] <= domain.lowerCorner[axis])
+                {
+                    positions[i][axis] = domain.lowerCorner[axis];
+                    velocities[i][axis] = std::max(velocities[i][axis], 0.0);
+                }
+
+                if ((m_closedDomainBoundaryFlag & upperFlags[axis]) != 0 &&
+                    positions[i][axis] >= domain.upperCorner[axis])
+                {
+                    positions[i][axis] = domain.upperCorner[axis];
+                    velocities[i][axis] = std::min(velocities[i][axis], 0.0);
+                }
+            }
+        });
 }
 
 template <size_t N>

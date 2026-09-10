@@ -38,6 +38,9 @@ void AddMPMFluidSolver(pybind11::module& m, const char* name)
         .def_property_readonly("mpmSystemData", &Solver::GetMPMSystemData)
         .def_property("timeStepLimitScale", &Solver::GetTimeStepLimitScale,
                       &Solver::SetTimeStepLimitScale)
+        .def_property("closedDomainBoundaryFlag",
+                      &Solver::GetClosedDomainBoundaryFlag,
+                      &Solver::SetClosedDomainBoundaryFlag)
         .def_property_readonly(
             "targetDensity",
             [](const Solver& solver) {

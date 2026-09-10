@@ -28,6 +28,13 @@ namespace CubbyFlow
 //! Uses the Tait equation of state with existing MPM particle-grid transfers
 //! and particle-solver collision lifecycle.
 //!
+//! \note Choose the artificial speed of sound high enough to keep the maximum
+//! relative density error near or below 3%; ten times the expected peak flow
+//! speed is a common starting point. Adaptive stepping limits each step to
+//! `timeStepLimitScale * minGridSpacing / (speedOfSound + maxParticleSpeed)`.
+//! This explicit limit assumes weak compression; reduce the scale or increase
+//! the sound speed when density error or pressure oscillation is excessive.
+//!
 template <size_t N>
 class MPMFluidSolver : public std::conditional_t<N == 2, ParticleSystemSolver2,
                                                  ParticleSystemSolver3>
@@ -67,6 +74,12 @@ class MPMFluidSolver : public std::conditional_t<N == 2, ParticleSystemSolver2,
     //! Sets the adaptive time-step scale in `(0, 1]`.
     void SetTimeStepLimitScale(double newScale);
 
+    //! Returns the closed domain boundary flag.
+    [[nodiscard]] int GetClosedDomainBoundaryFlag() const;
+
+    //! Sets the closed domain boundary flag.
+    void SetClosedDomainBoundaryFlag(int flag);
+
     //! Returns a builder for MPMFluidSolver.
     [[nodiscard]] static Builder GetBuilder();
 
@@ -84,6 +97,9 @@ class MPMFluidSolver : public std::conditional_t<N == 2, ParticleSystemSolver2,
     //! Advances particle-grid fluid state before base particle integration.
     void OnBeginAdvanceTimeStep(double timeStepInSeconds) override;
 
+    //! Projects particles back into selected closed domain boundaries.
+    void OnEndAdvanceTimeStep(double timeStepInSeconds) override;
+
  private:
     [[nodiscard]] static SizeType ClampIndex(const Vector<ssize_t, N>& index,
                                              const SizeType& dataSize);
@@ -92,9 +108,14 @@ class MPMFluidSolver : public std::conditional_t<N == 2, ParticleSystemSolver2,
 
     void UpdateGridVelocities(double timeStepInSeconds);
 
+    void ConstrainGridVelocities();
+
+    void ConstrainParticlesToDomain();
+
     std::shared_ptr<MPMFluidSystemData<N>> m_mpmSystemData;
     MPMFluidConstitutiveModel<N> m_constitutiveModel;
     double m_timeStepLimitScale = 0.9;
+    int m_closedDomainBoundaryFlag = DIRECTION_ALL;
 };
 
 //! Front-end to create MPMFluidSolver objects step by step.

@@ -12,9 +12,13 @@
 
 #include <Core/Emitter/PointParticleEmitter2.hpp>
 #include <Core/Emitter/PointParticleEmitter3.hpp>
+#include <Core/Geometry/Plane.hpp>
+#include <Core/Geometry/RigidBodyCollider.hpp>
 #include <Core/Solver/Particle/MPM/MPMFluidSolver.hpp>
 #include <Core/Utils/Constants.hpp>
+#include <Core/Utils/IterationUtils.hpp>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -67,6 +71,11 @@ template <size_t N>
 void ExpectParameters()
 {
     MPMFluidSolver<N> solver;
+    EXPECT_EQ(solver.GetClosedDomainBoundaryFlag(), DIRECTION_ALL);
+
+    solver.SetClosedDomainBoundaryFlag(DIRECTION_LEFT | DIRECTION_UP);
+    EXPECT_EQ(solver.GetClosedDomainBoundaryFlag(),
+              DIRECTION_LEFT | DIRECTION_UP);
     EXPECT_DOUBLE_EQ(solver.GetTimeStepLimitScale(), 0.9);
     EXPECT_DOUBLE_EQ(solver.GetConstitutiveModel().GetTargetDensity(),
                      WATER_DENSITY);
@@ -333,6 +342,390 @@ void ExpectCompressedParticlesMoveOutwardAndStayFinite()
         }
     }
 }
+
+template <size_t N>
+void ExpectClosedDomainWalls()
+{
+    constexpr std::array lowerFlags{ DIRECTION_LEFT, DIRECTION_DOWN,
+                                     DIRECTION_BACK };
+    constexpr std::array upperFlags{ DIRECTION_RIGHT, DIRECTION_UP,
+                                     DIRECTION_FRONT };
+    const auto resolution = VectorUZ<N>::MakeConstant(4);
+    const auto spacing = VectorD<N>::MakeConstant(1.0);
+
+    for (size_t axis = 0; axis < N; ++axis)
+    {
+        for (bool isUpper : { false, true })
+        {
+            TestableMPMFluidSolver<N> solver{ resolution, spacing };
+            solver.SetClosedDomainBoundaryFlag(isUpper ? upperFlags[axis]
+                                                       : lowerFlags[axis]);
+            solver.SetGravity({});
+            solver.SetDragCoefficient(0.0);
+
+            VectorD<N> position = VectorD<N>::MakeConstant(2.0);
+            VectorD<N> velocity;
+
+            position[axis] = isUpper ? 3.75 : 0.25;
+            velocity[axis] = isUpper ? 1.0 : -1.0;
+
+            auto data = solver.GetMPMSystemData();
+            data->AddParticle(position, velocity);
+
+            solver.BeginStep(1e-3);
+
+            VectorUZ<N> nodeIndex = VectorUZ<N>::MakeConstant(2);
+            nodeIndex[axis] =
+                isUpper ? data->GridMass().DataSize()[axis] - 1 : 0;
+
+            ASSERT_GT(data->GridMass()(nodeIndex), 0.0);
+            EXPECT_DOUBLE_EQ(data->GridVelocities()(nodeIndex)[axis], 0.0);
+        }
+    }
+
+    TestableMPMFluidSolver<N> open{ resolution, spacing };
+    open.SetClosedDomainBoundaryFlag(DIRECTION_NONE);
+    open.SetGravity({});
+    open.SetDragCoefficient(0.0);
+
+    VectorD<N> position = VectorD<N>::MakeConstant(2.0);
+    VectorD<N> velocity;
+
+    position[0] = 0.25;
+    velocity[0] = -1.0;
+
+    auto data = open.GetMPMSystemData();
+    data->AddParticle(position, velocity);
+
+    open.BeginStep(1e-3);
+
+    VectorUZ<N> nodeIndex = VectorUZ<N>::MakeConstant(2);
+    nodeIndex[0] = 0;
+
+    ASSERT_GT(data->GridMass()(nodeIndex), 0.0);
+    EXPECT_NEAR(data->GridVelocities()(nodeIndex)[0], -1.0, 1e-12);
+}
+
+template <size_t N>
+void ExpectMovingColliderAffectsGrid()
+{
+    TestableMPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(4),
+                                      VectorD<N>::MakeConstant(1.0) };
+    solver.SetClosedDomainBoundaryFlag(DIRECTION_NONE);
+    solver.SetGravity({});
+    solver.SetDragCoefficient(0.0);
+
+    VectorD<N> normal;
+    normal[0] = 1.0;
+
+    auto collider = std::make_shared<RigidBodyCollider<N>>(
+        std::make_shared<Plane<N>>(normal, VectorD<N>{}));
+    collider->linearVelocity[0] = 1.0;
+
+    solver.SetCollider(collider);
+
+    VectorD<N> position = VectorD<N>::MakeConstant(2.0);
+    position[0] = 0.25;
+
+    auto data = solver.GetMPMSystemData();
+    data->AddParticle(position);
+
+    solver.BeginStep(1e-3);
+
+    VectorUZ<N> nodeIndex = VectorUZ<N>::MakeConstant(2);
+    nodeIndex[0] = 0;
+
+    ASSERT_GT(data->GridMass()(nodeIndex), 0.0);
+    EXPECT_DOUBLE_EQ(data->GridVelocities()(nodeIndex)[0], 1.0);
+}
+
+template <size_t N>
+void ExpectFrictionAffectsGrid()
+{
+    const auto runCase = [](double frictionCoefficient) {
+        TestableMPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(4),
+                                          VectorD<N>::MakeConstant(1.0) };
+        solver.SetClosedDomainBoundaryFlag(DIRECTION_NONE);
+        solver.SetGravity({});
+        solver.SetDragCoefficient(0.0);
+
+        VectorD<N> normal;
+        normal[1] = 1.0;
+
+        VectorD<N> point;
+        point[1] = 2.0;
+
+        auto collider = std::make_shared<RigidBodyCollider<N>>(
+            std::make_shared<Plane<N>>(normal, point));
+        collider->SetFrictionCoefficient(frictionCoefficient);
+
+        solver.SetCollider(collider);
+
+        VectorD<N> position = VectorD<N>::MakeConstant(2.25);
+        VectorD<N> velocity;
+
+        velocity[0] = 1.0;
+        velocity[1] = -1.0;
+
+        auto data = solver.GetMPMSystemData();
+        data->AddParticle(position, velocity);
+
+        solver.BeginStep(1e-3);
+
+        const VectorUZ<N> nodeIndex = VectorUZ<N>::MakeConstant(2);
+        EXPECT_GT(data->GridMass()(nodeIndex), 0.0);
+
+        return data->GridVelocities()(nodeIndex);
+    };
+
+    const auto frictionless = runCase(0.0);
+    EXPECT_NEAR(frictionless[0], 1.0, 1e-12);
+    EXPECT_DOUBLE_EQ(frictionless[1], 0.0);
+
+    const auto frictional = runCase(1.0);
+    EXPECT_DOUBLE_EQ(frictional[0], 0.0);
+    EXPECT_DOUBLE_EQ(frictional[1], 0.0);
+}
+
+template <size_t N>
+void ExpectParticleDomainProjection(size_t axis, bool isUpper)
+{
+    constexpr std::array lowerFlags{ DIRECTION_LEFT, DIRECTION_DOWN,
+                                     DIRECTION_BACK };
+    constexpr std::array upperFlags{ DIRECTION_RIGHT, DIRECTION_UP,
+                                     DIRECTION_FRONT };
+    const auto runCase = [axis, isUpper](int boundaryFlag,
+                                         double normalVelocity) {
+        MPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(4),
+                                  VectorD<N>::MakeConstant(1.0) };
+
+        UseOneFixedStep(&solver);
+
+        solver.SetClosedDomainBoundaryFlag(boundaryFlag);
+        solver.SetGravity({});
+        solver.SetDragCoefficient(0.0);
+
+        VectorD<N> position = VectorD<N>::MakeConstant(2.0);
+        VectorD<N> velocity;
+
+        position[axis] = isUpper ? 4.01 : -0.01;
+        velocity[axis] = normalVelocity;
+
+        auto data = solver.GetMPMSystemData();
+        data->AddParticle(position, velocity);
+
+        solver.Update(Frame{ 0, 1e-3 });
+
+        return std::array{ data->Positions()[0][axis],
+                           data->Velocities()[0][axis] };
+    };
+
+    const int boundaryFlag = isUpper ? upperFlags[axis] : lowerFlags[axis];
+    const double outwardVelocity = isUpper ? 1.0 : -1.0;
+    const double boundary = isUpper ? 4.0 : 0.0;
+
+    const auto closed = runCase(boundaryFlag, outwardVelocity);
+    EXPECT_DOUBLE_EQ(closed[0], boundary);
+    EXPECT_NEAR(closed[1], 0.0, 1e-12);
+
+    const auto inward = runCase(boundaryFlag, -outwardVelocity);
+    EXPECT_DOUBLE_EQ(inward[0], boundary);
+    EXPECT_NEAR(inward[1], -outwardVelocity, 1e-12);
+
+    const auto open = runCase(DIRECTION_NONE, outwardVelocity);
+    EXPECT_NEAR(open[0], isUpper ? 4.011 : -0.011, 1e-12);
+    EXPECT_NEAR(open[1], outwardVelocity, 1e-12);
+}
+
+template <size_t N>
+void ExpectParticleColliderProjection()
+{
+    constexpr double radius = 0.1;
+    MPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(4),
+                              VectorD<N>::MakeConstant(1.0),
+                              {},
+                              radius,
+                              1.0 };
+
+    UseOneFixedStep(&solver);
+
+    solver.SetClosedDomainBoundaryFlag(DIRECTION_NONE);
+    solver.SetGravity({});
+    solver.SetDragCoefficient(0.0);
+
+    VectorD<N> normal;
+    normal[1] = 1.0;
+
+    VectorD<N> point;
+    point[1] = 1.0;
+
+    solver.SetCollider(std::make_shared<RigidBodyCollider<N>>(
+        std::make_shared<Plane<N>>(normal, point)));
+
+    VectorD<N> position = VectorD<N>::MakeConstant(2.0);
+    VectorD<N> velocity;
+
+    position[1] = 0.95;
+    velocity[1] = -1.0;
+
+    auto data = solver.GetMPMSystemData();
+    data->AddParticle(position, velocity);
+
+    solver.Update(Frame{ 0, 1e-3 });
+
+    EXPECT_GE(data->Positions()[0][1], point[1] + radius);
+    EXPECT_GE(data->Velocities()[0][1], 0.0);
+}
+
+template <size_t N>
+double ParticleMeasure(double spacing)
+{
+    double result = 1.0;
+
+    for (size_t axis = 0; axis < N; ++axis)
+    {
+        result *= spacing;
+    }
+
+    return result;
+}
+
+template <size_t N>
+void AddParticleBlock(MPMFluidSolver<N>* solver, const VectorUZ<N>& size,
+                      double spacing)
+{
+    Array1<VectorD<N>> positions;
+
+    ForEachIndex(size, [&positions, spacing](auto... rawIndices) {
+        const VectorUZ<N> index{ rawIndices... };
+        VectorD<N> position;
+
+        for (size_t axis = 0; axis < N; ++axis)
+        {
+            position[axis] = 0.05 + spacing * static_cast<double>(index[axis]);
+        }
+
+        positions.Append(position);
+    });
+
+    solver->GetMPMSystemData()->AddParticles(positions);
+}
+
+template <size_t N>
+void ExpectHydrostaticColumnRemainsBounded()
+{
+    constexpr double particleSpacing = 0.1;
+    constexpr double targetDensity = 1000.0;
+    const double particleMass =
+        targetDensity * ParticleMeasure<N>(particleSpacing);
+
+    MPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(6),
+                              VectorD<N>::MakeConstant(0.1),
+                              {},
+                              0.02,
+                              particleMass,
+                              targetDensity,
+                              50.0 };
+    solver.SetDragCoefficient(0.0);
+    solver.SetTimeStepLimitScale(0.5);
+
+    VectorUZ<N> blockSize = VectorUZ<N>::MakeConstant(6);
+    blockSize[1] = 4;
+
+    AddParticleBlock(&solver, blockSize, particleSpacing);
+
+    for (int frame = 0; frame < 24; ++frame)
+    {
+        solver.Update(Frame{ frame, 1.0 / 240.0 });
+    }
+
+    const auto data = solver.GetMPMSystemData();
+    const auto masses = data->ParticleMasses();
+    const auto initialVolumes = data->InitialVolumes();
+    const auto volumeRatios = data->VolumeRatios();
+    double maxDensityError = 0.0;
+
+    for (size_t i = 0; i < data->NumberOfParticles(); ++i)
+    {
+        const double density = solver.GetConstitutiveModel().ComputeDensity(
+            masses[i], initialVolumes[i] * volumeRatios[i]);
+        const double pressure =
+            solver.GetConstitutiveModel().ComputePressure(density);
+
+        EXPECT_TRUE(std::isfinite(density));
+        EXPECT_TRUE(std::isfinite(pressure));
+        EXPECT_GT(density, 0.0);
+
+        maxDensityError =
+            std::max(maxDensityError, std::abs(density / targetDensity - 1.0));
+    }
+
+    EXPECT_LT(maxDensityError, 0.03);
+}
+
+template <size_t N>
+void ExpectDamBreakConservesMassAndStaysInDomain()
+{
+    constexpr double particleSpacing = 0.05;
+    constexpr double targetDensity = 1000.0;
+    const double particleMass =
+        targetDensity * ParticleMeasure<N>(particleSpacing);
+
+    MPMFluidSolver<N> solver{ VectorUZ<N>::MakeConstant(10),
+                              VectorD<N>::MakeConstant(0.1),
+                              {},
+                              0.02,
+                              particleMass,
+                              targetDensity,
+                              30.0 };
+    solver.SetDragCoefficient(0.0);
+    solver.SetTimeStepLimitScale(0.5);
+
+    VectorUZ<N> blockSize = VectorUZ<N>::MakeConstant(3);
+    blockSize[1] = 6;
+
+    AddParticleBlock(&solver, blockSize, particleSpacing);
+
+    const auto data = solver.GetMPMSystemData();
+    const size_t initialCount = data->NumberOfParticles();
+    const double initialMass = particleMass * static_cast<double>(initialCount);
+    double initialMaxX = 0.0;
+
+    for (const auto& position : data->Positions())
+    {
+        initialMaxX = std::max(initialMaxX, position[0]);
+    }
+
+    for (int frame = 0; frame < 40; ++frame)
+    {
+        solver.Update(Frame{ frame, 1.0 / 240.0 });
+    }
+
+    const auto domain = data->GridMass().GetBoundingBox();
+    double finalMass = 0.0;
+    double finalMaxX = 0.0;
+
+    for (size_t i = 0; i < data->NumberOfParticles(); ++i)
+    {
+        finalMass += data->ParticleMasses()[i];
+        finalMaxX = std::max(finalMaxX, data->Positions()[i][0]);
+
+        for (size_t axis = 0; axis < N; ++axis)
+        {
+            EXPECT_GE(data->Positions()[i][axis], domain.lowerCorner[axis]);
+            EXPECT_LE(data->Positions()[i][axis], domain.upperCorner[axis]);
+        }
+
+        EXPECT_TRUE(std::isfinite(data->VolumeRatios()[i]));
+        EXPECT_GT(data->VolumeRatios()[i], 0.0);
+    }
+
+    EXPECT_EQ(data->NumberOfParticles(), initialCount);
+    EXPECT_NEAR(finalMass, initialMass,
+                std::numeric_limits<double>::epsilon() * initialMass *
+                    static_cast<double>(initialCount));
+    EXPECT_GT(finalMaxX, initialMaxX + 0.01);
+}
 }  // namespace
 
 TEST(MPMFluidSolver, ParametersAndBuilder)
@@ -371,4 +764,51 @@ TEST(MPMFluidSolver, CompressedParticlesMoveOutwardAndStayFinite)
 {
     ExpectCompressedParticlesMoveOutwardAndStayFinite<2>();
     ExpectCompressedParticlesMoveOutwardAndStayFinite<3>();
+}
+
+TEST(MPMFluidSolver, ClosedDomainWalls)
+{
+    ExpectClosedDomainWalls<2>();
+    ExpectClosedDomainWalls<3>();
+}
+
+TEST(MPMFluidSolver, ColliderContact)
+{
+    ExpectMovingColliderAffectsGrid<2>();
+    ExpectMovingColliderAffectsGrid<3>();
+    ExpectFrictionAffectsGrid<2>();
+    ExpectFrictionAffectsGrid<3>();
+}
+
+TEST(MPMFluidSolver, ParticleDomainProjection)
+{
+    for (bool isUpper : { false, true })
+    {
+        for (size_t axis = 0; axis < 2; ++axis)
+        {
+            ExpectParticleDomainProjection<2>(axis, isUpper);
+        }
+        for (size_t axis = 0; axis < 3; ++axis)
+        {
+            ExpectParticleDomainProjection<3>(axis, isUpper);
+        }
+    }
+}
+
+TEST(MPMFluidSolver, ParticleColliderProjection)
+{
+    ExpectParticleColliderProjection<2>();
+    ExpectParticleColliderProjection<3>();
+}
+
+TEST(MPMFluidSolver, HydrostaticColumnRemainsBounded)
+{
+    ExpectHydrostaticColumnRemainsBounded<2>();
+    ExpectHydrostaticColumnRemainsBounded<3>();
+}
+
+TEST(MPMFluidSolver, DamBreakConservesMassAndStaysInDomain)
+{
+    ExpectDamBreakConservesMassAndStaysInDomain<2>();
+    ExpectDamBreakConservesMassAndStaysInDomain<3>();
 }
