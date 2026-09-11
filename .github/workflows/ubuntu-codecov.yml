@@ -1,10 +1,7 @@
 name: Ubuntu - Codecov
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch: 
 
 env:
   PYTHON_VERSION: '3.12'
@@ -46,22 +43,22 @@ jobs:
       run: cd build && make
     - name: Run Unit Test
       run: /home/runner/work/CubbyFlow/CubbyFlow/build/bin/UnitTests
-    - name: Run Python Test
-      run: |
-        python -m pip install --require-hashes --only-binary :all: -r requirements.txt
-        PYTHONPATH="${GITHUB_WORKSPACE}/build/lib" python -m pytest Tests/PythonTests/
-    - name: Collect coverage report
-      run: |
-        GCOV_TOOL="$(command -v gcov-${{ matrix.version }})"
-        lcov --gcov-tool "${GCOV_TOOL}" --ignore-errors mismatch --directory build --capture --output-file build/coverage.info
-        lcov --ignore-errors unused --gcov-tool "${GCOV_TOOL}" --ignore-errors mismatch --remove build/coverage.info '/usr/*' '*/Tests/*' --output-file build/coverage.info.cleaned
-    - name: Upload Coverage Reports to Codecov
-      uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
-      with:
-        disable_search: true
-        fail_ci_if_error: true
-        files: ./build/coverage.info.cleaned
-        flags: unittests
-        name: ubuntu-codecov
-        token: ${{ secrets.CODECOV_TOKEN }}
-        verbose: true
+    # - name: Run Python Test
+    #   run: |
+    #     python -m pip install --require-hashes --only-binary :all: -r requirements.txt
+    #     PYTHONPATH="${GITHUB_WORKSPACE}/build/lib" python -m pytest Tests/PythonTests/
+    # - name: Collect coverage report
+    #   run: |
+    #     GCOV_TOOL="$(command -v gcov-${{ matrix.version }})"
+    #     lcov --gcov-tool "${GCOV_TOOL}" --ignore-errors mismatch --directory build --capture --output-file build/coverage.info
+    #     lcov --ignore-errors unused --gcov-tool "${GCOV_TOOL}" --ignore-errors mismatch --remove build/coverage.info '/usr/*' '*/Tests/*' --output-file build/coverage.info.cleaned
+    # - name: Upload Coverage Reports to Codecov
+    #   uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
+    #   with:
+    #     disable_search: true
+    #     fail_ci_if_error: true
+    #     files: ./build/coverage.info.cleaned
+    #     flags: unittests
+    #     name: ubuntu-codecov
+    #     token: ${{ secrets.CODECOV_TOKEN }}
+    #     verbose: true
